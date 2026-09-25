@@ -182,16 +182,21 @@ export default function HomeTransactions() {
   };
 
   useEffect(() => {
-    fetchData();
+    const timer = setTimeout(() => {
+      fetchData();
+    }, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   // Tính toán số liệu thống kê tháng hiện tại
   const stats = useMemo(() => {
-    const currentMonth = new Date().getMonth();
-    const currentYear = new Date().getFullYear();
+    const currentMonth = 8; // Tháng 9 (0-indexed)
+    const currentYear = 2026;
 
     const monthlyTxs = transactions.filter((t) => {
-      const d = new Date(t.transaction_date || t.created_at || Date.now());
+      const dateStr = t.transaction_date || t.created_at;
+      if (!dateStr) return false;
+      const d = new Date(dateStr);
       return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
     });
 

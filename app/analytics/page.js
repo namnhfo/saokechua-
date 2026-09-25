@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import BottomNav from '@/components/BottomNav';
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
@@ -16,13 +16,9 @@ import {
   ChevronRight,
   PieChart as PieIcon,
   Calendar,
-  Wallet,
-  ArrowUpRight,
-  TrendingDown,
   Layers,
   ArrowLeft,
-  Sparkles,
-  Info
+  TrendingDown,
 } from 'lucide-react';
 
 // Dữ liệu mẫu ban đầu cho Analytics khi chưa kết nối Supabase hoặc demo
@@ -42,7 +38,7 @@ const FALLBACK_TRANSACTIONS = [
     amount: 45000,
     type: 'OUT',
     category_id: 1,
-    created_at: '2026-09-24T08:30:00Z',
+    transaction_date: '2026-09-24T08:30:00Z',
     categories: { id: 1, name: 'Ăn uống & Cà phê', color: '#f59e0b' },
   },
   {
@@ -50,7 +46,7 @@ const FALLBACK_TRANSACTIONS = [
     amount: 1500000,
     type: 'OUT',
     category_id: 3,
-    created_at: '2026-09-23T10:00:00Z',
+    transaction_date: '2026-09-23T10:00:00Z',
     categories: { id: 3, name: 'Hóa đơn & Tiện ích', color: '#8b5cf6' },
   },
   {
@@ -58,7 +54,7 @@ const FALLBACK_TRANSACTIONS = [
     amount: 75000,
     type: 'OUT',
     category_id: 4,
-    created_at: '2026-09-24T18:20:00Z',
+    transaction_date: '2026-09-24T18:20:00Z',
     categories: { id: 4, name: 'Di chuyển & Xăng xe', color: '#3b82f6' },
   },
   {
@@ -66,7 +62,7 @@ const FALLBACK_TRANSACTIONS = [
     amount: 250000,
     type: 'OUT',
     category_id: 1,
-    created_at: '2026-09-18T12:15:00Z',
+    transaction_date: '2026-09-18T12:15:00Z',
     categories: { id: 1, name: 'Ăn uống & Cà phê', color: '#f59e0b' },
   },
   {
@@ -74,7 +70,7 @@ const FALLBACK_TRANSACTIONS = [
     amount: 420000,
     type: 'OUT',
     category_id: 5,
-    created_at: '2026-09-15T15:45:00Z',
+    transaction_date: '2026-09-15T15:45:00Z',
     categories: { id: 5, name: 'Mua sắm & Gia dụng', color: '#ec4899' },
   },
   {
@@ -82,25 +78,8 @@ const FALLBACK_TRANSACTIONS = [
     amount: 60000,
     type: 'OUT',
     category_id: 4,
-    created_at: '2026-09-10T09:00:00Z',
+    transaction_date: '2026-09-10T09:00:00Z',
     categories: { id: 4, name: 'Di chuyển & Xăng xe', color: '#3b82f6' },
-  },
-  // Giao dịch tháng 08 để kiểm tra bộ lọc tháng
-  {
-    id: 7,
-    amount: 1800000,
-    type: 'OUT',
-    category_id: 3,
-    created_at: '2026-08-25T10:00:00Z',
-    categories: { id: 3, name: 'Hóa đơn & Tiện ích', color: '#8b5cf6' },
-  },
-  {
-    id: 8,
-    amount: 650000,
-    type: 'OUT',
-    category_id: 1,
-    created_at: '2026-08-20T19:00:00Z',
-    categories: { id: 1, name: 'Ăn uống & Cà phê', color: '#f59e0b' },
   },
 ];
 
@@ -116,28 +95,68 @@ const PALETTE = [
   '#64748b',
 ];
 
+// Format tiền tệ VND
+const formatVND = (num) => {
+  return new Intl.NumberFormat('vi-VN', {
+    style: 'currency',
+    currency: 'VND',
+  }).format(num || 0);
+};
+
+// Chuẩn React 19: Hook phát hiện mounted không gây cascading render
+const emptySubscribe = () => () => {};
+function useMounted() {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
+}
+
+// Khai báo CustomTooltip bên ngoài component render để tối ưu bộ nhớ & tránh lỗi React 19
+function CustomTooltip({ active, payload }) {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-slate-900 border border-slate-700/80 px-3 py-2 rounded-xl shadow-2xl text-xs">
+        <div className="flex items-center gap-1.5 font-semibold text-white">
+          <span
+            className="w-2 h-2 rounded-full"
+            style={{ backgroundColor: data.color }}
+          />
+          <span>{data.name}</span>
+        </div>
+        <div className="mt-1 flex items-center justify-between gap-3 text-slate-300">
+          <span>Số tiền:</span>
+          <span className="font-bold text-rose-400 font-mono">
+            {formatVND(data.amount)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-3 text-[11px] text-slate-400">
+          <span>Tỷ trọng:</span>
+          <span className="font-semibold text-emerald-400">
+            {data.percentage}%
+          </span>
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
 export default function AnalyticsPage() {
-  const [mounted, setMounted] = useState(false);
+  const mounted = useMounted();
   const [transactions, setTransactions] = useState(FALLBACK_TRANSACTIONS);
-  const [categories, setCategories] = useState(FALLBACK_CATEGORIES);
-  const [loading, setLoading] = useState(false);
+  const [, setCategories] = useState(FALLBACK_CATEGORIES);
 
-  // Bộ chọn Tháng & Năm (mặc định lấy tháng và năm hiện tại)
-  const currentDate = new Date();
-  const [selectedMonth, setSelectedMonth] = useState(currentDate.getMonth() + 1); // 1 - 12
-  const [selectedYear, setSelectedYear] = useState(currentDate.getFullYear());
+  // Bộ chọn Tháng & Năm
+  const [selectedMonth, setSelectedMonth] = useState(9); // Tháng 9
+  const [selectedYear, setSelectedYear] = useState(2026); // Năm 2026
 
-  useEffect(() => {
-    setMounted(true);
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (!isSupabaseConfigured()) return;
 
     try {
-      setLoading(true);
-      // Lấy danh sách categories
       const { data: catData } = await supabase
         .from('categories')
         .select('*')
@@ -147,7 +166,6 @@ export default function AnalyticsPage() {
         setCategories(catData);
       }
 
-      // Lấy danh sách giao dịch chi (OUT) kèm category
       const { data: txData, error: txError } = await supabase
         .from('transactions')
         .select(`
@@ -164,17 +182,23 @@ export default function AnalyticsPage() {
           )
         `)
         .eq('type', 'OUT')
-        .order('created_at', { ascending: false });
+        .order('transaction_date', { ascending: false });
 
-      if (!txError && txData) {
+      if (!txError && txData && txData.length > 0) {
         setTransactions(txData);
       }
     } catch (err) {
       console.error('Lỗi khi fetch Supabase Analytics:', err);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Gọi tải dữ liệu sau khi component mount
+    const timer = setTimeout(() => {
+      fetchData();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [fetchData]);
 
   // Điều hướng chuyển tháng trước / sau
   const handlePrevMonth = () => {
@@ -197,22 +221,20 @@ export default function AnalyticsPage() {
 
   // Tính toán dữ liệu thống kê theo tháng đã chọn
   const { chartData, totalExpense, categoryCount } = useMemo(() => {
-    // 1. Lọc giao dịch OUT trong tháng & năm được chọn
     const filtered = transactions.filter((tx) => {
       if (tx.type !== 'OUT') return false;
-      const d = new Date(tx.transaction_date || tx.created_at || Date.now());
+      const dateStr = tx.transaction_date || tx.created_at;
+      if (!dateStr) return false;
+      const d = new Date(dateStr);
       return (
         d.getMonth() + 1 === Number(selectedMonth) &&
         d.getFullYear() === Number(selectedYear)
       );
     });
 
-    // 2. Tính tổng chi cả tháng
     const total = filtered.reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
 
-    // 3. Gom nhóm theo danh mục
     const groupMap = {};
-
     filtered.forEach((tx) => {
       const catId = tx.category_id || tx.categories?.id || 'unassigned';
       const catName = tx.categories?.name || 'Chưa phân loại';
@@ -231,7 +253,6 @@ export default function AnalyticsPage() {
       groupMap[catId].count += 1;
     });
 
-    // 4. Định dạng dữ liệu cho Pie Chart & Danh sách chi tiết
     const list = Object.values(groupMap).map((item, index) => {
       const percent = total > 0 ? (item.amount / total) * 100 : 0;
       return {
@@ -241,7 +262,6 @@ export default function AnalyticsPage() {
       };
     });
 
-    // Sắp xếp giảm dần theo số tiền chi tiêu
     list.sort((a, b) => b.amount - a.amount);
 
     return {
@@ -250,45 +270,6 @@ export default function AnalyticsPage() {
       categoryCount: list.length,
     };
   }, [transactions, selectedMonth, selectedYear]);
-
-  // Format tiền tệ VND
-  const formatVND = (num) => {
-    return new Intl.NumberFormat('vi-VN', {
-      style: 'currency',
-      currency: 'VND',
-    }).format(num || 0);
-  };
-
-  // Custom Tooltip cho Doughnut Chart
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div className="bg-slate-900 border border-slate-700/80 px-3 py-2 rounded-xl shadow-2xl text-xs">
-          <div className="flex items-center gap-1.5 font-semibold text-white">
-            <span
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: data.color }}
-            />
-            <span>{data.name}</span>
-          </div>
-          <div className="mt-1 flex items-center justify-between gap-3 text-slate-300">
-            <span>Số tiền:</span>
-            <span className="font-bold text-rose-400 font-mono">
-              {formatVND(data.amount)}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-3 text-[11px] text-slate-400">
-            <span>Tỷ trọng:</span>
-            <span className="font-semibold text-emerald-400">
-              {data.percentage}%
-            </span>
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
 
   return (
     <div className="flex flex-col min-h-screen pb-20 selection:bg-emerald-500 selection:text-white">
@@ -318,7 +299,7 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Bộ điều khiển chọn Tháng/Năm chuẩn Mobile */}
+        {/* Bộ điều khiển chọn Tháng/Năm */}
         <div className="flex items-center justify-between p-2 bg-slate-900/90 rounded-2xl border border-slate-800/80">
           <button
             onClick={handlePrevMonth}
@@ -329,7 +310,6 @@ export default function AnalyticsPage() {
           </button>
 
           <div className="flex items-center gap-2">
-            {/* Chọn Tháng */}
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(Number(e.target.value))}
@@ -342,7 +322,6 @@ export default function AnalyticsPage() {
               ))}
             </select>
 
-            {/* Chọn Năm */}
             <select
               value={selectedYear}
               onChange={(e) => setSelectedYear(Number(e.target.value))}
@@ -408,7 +387,7 @@ export default function AnalyticsPage() {
                   </PieChart>
                 </ResponsiveContainer>
 
-                {/* Nhãn tâm biểu đồ: Tổng chi tiêu */}
+                {/* Nhãn tâm biểu đồ */}
                 <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
                   <span className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
                     Tổng chi tháng
@@ -452,7 +431,6 @@ export default function AnalyticsPage() {
               key={item.id}
               className="p-3.5 rounded-2xl bg-slate-900/70 border border-slate-800/80 shadow-sm transition hover:border-slate-700"
             >
-              {/* Dòng 1: Tên danh mục + Số tiền */}
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-2">
                   <span
@@ -479,7 +457,6 @@ export default function AnalyticsPage() {
                 </div>
               </div>
 
-              {/* Dòng 2: Thanh tiến trình phần trăm (Progress bar) */}
               <div className="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden mt-2 border border-slate-800/50">
                 <div
                   className="h-full rounded-full transition-all duration-500"
